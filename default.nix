@@ -35,6 +35,7 @@ let
       "/etc/ssl"            # SSL certificates and config
       "/etc/resolv.conf"    # DNS resolution
       "/nix"
+      "/etc/nix"            # Nix configuration
       "ro:/run/current-system/sw"
       "ro:/bin/sh"
       "$SANDBOX_TMP:/tmp"
@@ -77,6 +78,24 @@ let
         ALLOWLIST+=( "$HOME/.cache/$cache_dir" )
       fi
     done
+
+    # Add XDG config directories containing 'nix'
+    if [ -d "$HOME/.config" ]; then
+      for dir in "$HOME/.config"/*nix*; do
+        if [ -d "$dir" ]; then
+          ALLOWLIST+=( "$dir" )
+        fi
+      done
+    fi
+    
+    # Add XDG data directories containing 'nix'
+    if [ -d "$HOME/.local/share" ]; then
+      for dir in "$HOME/.local/share"/*nix*; do
+        if [ -d "$dir" ]; then
+          ALLOWLIST+=( "$dir" )
+        fi
+      done
+    fi
 
     whitelisted_envs=(
       "SHELL"
