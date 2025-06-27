@@ -1,7 +1,5 @@
 { lib
 , stdenv
-, fetchFromGitHub
-, buildNpmPackage
 , nodejs_22
 , bubblewrap
 , makeWrapper
@@ -39,9 +37,21 @@ let
       "ro:/run/current-system/sw"
       "ro:/bin/sh"
       "$SANDBOX_TMP:/tmp"
-      "$HOME/.claude.json"
-      "$HOME/.claude"
-      "$HOME/.config/claude"
+    )
+    HOME_ALLOW=(
+      ".claude.json"
+      ".claude"
+      ".config/claude"
+      ".android"
+      ".ansible"
+      ".cargo"
+      ".config/nix"
+      ".cursor"
+      ".docker"
+      ".go"
+      ".java"
+      ".npm"
+      ".yarn"
     )
     CACHE_DIRS=(
       "go"
@@ -78,24 +88,11 @@ let
         ALLOWLIST+=( "$HOME/.cache/$cache_dir" )
       fi
     done
-
-    # Add XDG config directories containing 'nix'
-    if [ -d "$HOME/.config" ]; then
-      for dir in "$HOME/.config"/*nix*; do
-        if [ -d "$dir" ]; then
-          ALLOWLIST+=( "$dir" )
-        fi
-      done
-    fi
-    
-    # Add XDG data directories containing 'nix'
-    if [ -d "$HOME/.local/share" ]; then
-      for dir in "$HOME/.local/share"/*nix*; do
-        if [ -d "$dir" ]; then
-          ALLOWLIST+=( "$dir" )
-        fi
-      done
-    fi
+    for cache_dir in "''${HOME_ALLOW[@]}"; do
+      if [ -e "$HOME/$cache_dir" ]; then
+        ALLOWLIST+=( "$HOME/$cache_dir" )
+      fi
+    done
 
     whitelisted_envs=(
       "SHELL"
@@ -135,14 +132,8 @@ let
     args+=(
       --tmpfs /usr
       --dir /usr/bin
-      --ro-bind ${nodejs_22}/bin/node /usr/bin/node
       "''${env_args[@]}"
     )
-
-    # Check if env exists and bind it
-    if [ -f "${nodejs_22}/bin/env" ]; then
-      args+=(--ro-bind ${nodejs_22}/bin/env /usr/bin/env)
-    fi
 
     for p in "''${ALLOWLIST[@]}"; do
       if [[ "$p" == ro:* ]]; then
