@@ -13,6 +13,33 @@ let
   sandboxWrapper = writeShellScript "claude-sandbox" ''
     #!${stdenv.shell}
     
+    # Parse command line flags
+    ENABLE_FUSE=0
+    ENABLE_SSH_GIT=0
+    ENABLE_LIBVIRT=0
+    CLAUDE_ARGS=()
+    
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --fuse)
+          ENABLE_FUSE=1
+          shift
+          ;;
+        --ssh-git)
+          ENABLE_SSH_GIT=1
+          shift
+          ;;
+        --libvirt)
+          ENABLE_LIBVIRT=1
+          shift
+          ;;
+        *)
+          CLAUDE_ARGS+=("$1")
+          shift
+          ;;
+      esac
+    done
+    
     # Create isolated sandbox home directory
     SANDBOX_HOME="/tmp/claude-sandbox-home-$$"
     SANDBOX_TMP="/tmp/claude-sandbox-tmp-$$"
@@ -36,6 +63,7 @@ let
       "/etc/nix"            # Nix configuration
       "ro:/run/current-system/sw"
       "ro:/bin/sh"
+      "ro:/usr/bin/env"     # env command
       "$SANDBOX_TMP:/tmp"
     )
     HOME_ALLOW=(
@@ -94,6 +122,64 @@ let
       fi
     done
 
+    # Add conditional paths based on flags
+    if [ "$ENABLE_FUSE" -eq 1 ]; then
+      # Allow access to /tmp for fuse mounts
+      ALLOWLIST+=( "/tmp" )
+      # Allow access to common fuse mount points
+      if [ -d "/run/user/$(id -u)" ]; then
+        ALLOWLIST+=( "/run/user/$(id -u)" )
+      fi
+      # Allow access to /dev/fuse for FUSE operations
+      ALLOWLIST+=( "/dev/fuse" )
+    fi
+    
+    if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
+      # Allow access to SSH and git config in real home
+      if [ -d "$HOME/.ssh" ]; then
+        ALLOWLIST+=( "$HOME/.ssh" )
+      fi
+      if [ -d "$HOME/.gitconfig" ] || [ -f "$HOME/.gitconfig" ]; then
+        ALLOWLIST+=( "$HOME/.gitconfig" )
+      fi
+      if [ -d "$HOME/.git-credentials" ] || [ -f "$HOME/.git-credentials" ]; then
+        ALLOWLIST+=( "$HOME/.git-credentials" )
+      fi
+      # Also need SSH agent socket if it exists
+      if [ -n "$SSH_AUTH_SOCK" ] && [ -e "$SSH_AUTH_SOCK" ]; then
+        ALLOWLIST+=( "$SSH_AUTH_SOCK" )
+      fi
+      # GnuPG for git commit signing
+      if [ -d "$HOME/.gnupg" ]; then
+        ALLOWLIST+=( "$HOME/.gnupg" )
+      fi
+      # GPG agent socket
+      if [ -n "$GPG_AGENT_INFO" ]; then
+        GPG_SOCK=$(echo "$GPG_AGENT_INFO" | cut -d: -f1)
+        if [ -e "$GPG_SOCK" ]; then
+          ALLOWLIST+=( "$GPG_SOCK" )
+        fi
+      fi
+      # Modern gpg agent socket location
+      if [ -S "/run/user/$(id -u)/gnupg/S.gpg-agent" ]; then
+        ALLOWLIST+=( "/run/user/$(id -u)/gnupg/S.gpg-agent" )
+      fi
+    fi
+    
+    if [ "$ENABLE_LIBVIRT" -eq 1 ]; then
+      # Allow access to libvirt socket
+      if [ -S "/var/run/libvirt/libvirt-sock" ]; then
+        ALLOWLIST+=( "/var/run/libvirt/libvirt-sock" )
+      fi
+      if [ -S "/run/libvirt/libvirt-sock" ]; then
+        ALLOWLIST+=( "/run/libvirt/libvirt-sock" )
+      fi
+      # Allow access to user session libvirt socket
+      if [ -S "/run/user/$(id -u)/libvirt/libvirt-sock" ]; then
+        ALLOWLIST+=( "/run/user/$(id -u)/libvirt/libvirt-sock" )
+      fi
+    fi
+
     whitelisted_envs=(
       "SHELL"
       "PATH"
@@ -114,6 +200,19 @@ let
     done
     env_args+=( --setenv "NODE_ENV" "production" )
     env_args+=( --setenv "SHELL" "$(readlink $(which $SHELL))" )
+    
+    # Pass SSH_AUTH_SOCK and GPG variables if --ssh-git is enabled
+    if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
+      if [ -n "$SSH_AUTH_SOCK" ]; then
+        env_args+=( --setenv "SSH_AUTH_SOCK" "$SSH_AUTH_SOCK" )
+      fi
+      if [ -n "$GPG_AGENT_INFO" ]; then
+        env_args+=( --setenv "GPG_AGENT_INFO" "$GPG_AGENT_INFO" )
+      fi
+      if [ -n "$GPG_TTY" ]; then
+        env_args+=( --setenv "GPG_TTY" "$GPG_TTY" )
+      fi
+    fi
 
     # Build bwrap argument list
     args=(
@@ -156,11 +255,11 @@ let
 
     # Use the claude executable from the npm package
     if [ $DRY_RUN ]; then
-      echo ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "$@"
+      echo ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "''${CLAUDE_ARGS[@]}"
     elif [ $START_SHELL ]; then
       exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- $(readlink $(which $SHELL))
     else
-      exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "$@"
+      exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "''${CLAUDE_ARGS[@]}"
     fi
   '';
 
