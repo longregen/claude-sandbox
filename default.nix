@@ -265,11 +265,11 @@ let
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "1.0.34";
+  version = "1.0.38";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "sha256-8f7XdvWRMv+icI8GMQW7AAmesdvpr/3SaWCRC723iSs=";
+    sha256 = "sha256-46N6iZzwkAbr9/XHzcYVBOYXX0yeYcnBucAIlbEblHM=";
   };
   
   nativeBuildInputs = [ makeWrapper ];
