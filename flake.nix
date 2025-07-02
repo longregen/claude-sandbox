@@ -27,6 +27,13 @@
             type = "app";
             program = "${claude-sandbox}/bin/claude-sandbox";
           };
+          update-claude = {
+            type = "app";
+            program = "${pkgs.writeShellScript "update-claude" ''
+              export PATH=${pkgs.lib.makeBinPath [ pkgs.curl pkgs.jq pkgs.nix pkgs.gnused ]}:$PATH
+              exec ${./update-claude.sh}
+            ''}";
+          };
         };
 
         devShells.default = pkgs.mkShell {

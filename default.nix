@@ -67,17 +67,20 @@ let
       "$SANDBOX_TMP:/tmp"
     )
     HOME_ALLOW=(
-      ".claude.json"
       ".claude"
-      ".config/claude"
+      ".claude.json"
       ".android"
       ".ansible"
       ".cargo"
+      ".config/claude"
       ".config/nix"
       ".cursor"
       ".docker"
       ".go"
       ".java"
+      ".nix-defexpr"
+      ".nix-channels"
+      ".nix-profile"
       ".npm"
       ".yarn"
     )
@@ -265,11 +268,11 @@ let
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "1.0.38";
+  version = "1.0.41";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "sha256-46N6iZzwkAbr9/XHzcYVBOYXX0yeYcnBucAIlbEblHM=";
+    sha256 = "1gk5560h5f66icznrjsvijiyz1ply6i2vpwgdfgyhwbvd8jkql8y";
   };
   
   nativeBuildInputs = [ makeWrapper ];
