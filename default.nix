@@ -73,6 +73,7 @@ let
       ".ansible"
       ".cargo"
       ".config/claude"
+      ".config/claude-sandbox"
       ".config/nix"
       ".cursor"
       ".docker"
@@ -180,6 +181,36 @@ let
       # Allow access to user session libvirt socket
       if [ -S "/run/user/$(id -u)/libvirt/libvirt-sock" ]; then
         ALLOWLIST+=( "/run/user/$(id -u)/libvirt/libvirt-sock" )
+      fi
+    fi
+    
+    # Always read config file if it exists
+    CONFIG_FILE="$HOME/.config/claude-sandbox/config.json"
+    if [ -f "$CONFIG_FILE" ]; then
+      # Parse the JSON config file
+      if command -v jq >/dev/null 2>&1; then
+        # Use jq if available
+        if [ -f "$CONFIG_FILE" ]; then
+          # Read includeFolders array
+          while IFS= read -r folder; do
+            # Expand tilde to home directory
+            expanded_folder=$(echo "$folder" | sed "s|^~|$HOME|")
+            if [ -d "$expanded_folder" ]; then
+              ALLOWLIST+=( "$expanded_folder" )
+            fi
+          done < <(jq -r '.includeFolders[]? // empty' "$CONFIG_FILE" 2>/dev/null)
+          
+          # Read includeHomePatterns array
+          while IFS= read -r pattern; do
+            # Add to HOME_ALLOW if it exists
+            if [ -e "$HOME/$pattern" ]; then
+              ALLOWLIST+=( "$HOME/$pattern" )
+            fi
+          done < <(jq -r '.includeHomePatterns[]? // empty' "$CONFIG_FILE" 2>/dev/null)
+        fi
+      else
+        # Fallback to basic parsing if jq is not available
+        echo "Warning: jq not found. Please install jq for proper config parsing." >&2
       fi
     fi
 
