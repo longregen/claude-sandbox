@@ -2,8 +2,8 @@
   description = "Claude Sandbox - Sandboxed Claude API environment using bubblewrap";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "git+ssh://gitea/mirrors/nixpkgs?shallow=1&ref=nixos-unstable";
+    flake-utils.url = "git+ssh://gitea/mirrors/flake-utils";
   };
 
   outputs = { self, nixpkgs, flake-utils }:
