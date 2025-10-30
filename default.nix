@@ -61,6 +61,10 @@ let
       "/etc/resolv.conf"    # DNS resolution
       "/nix"
       "/etc/nix"            # Nix configuration
+      "/etc/profile"
+      "/etc/profile.local"
+      "/etc/profiles/per-user/$USER"
+      "/etc/bashrc"
       "ro:/run/current-system/sw"
       "ro:/bin/sh"
       "ro:/usr/bin/env"     # env command
@@ -299,11 +303,11 @@ let
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.0.25";
+  version = "2.0.29";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "0bc5sgdgb16v99wqcxpsxqnkmybvbvygdmk9hsqljkm3749sybln";
+    sha256 = "01vy5rf8rqvfprbhqyqai13lgamp704fraw64qimwffp648474xc";
   };
   
   nativeBuildInputs = [ makeWrapper ];
