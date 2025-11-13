@@ -238,6 +238,12 @@ let
     done
     env_args+=( --setenv "NODE_ENV" "production" )
     env_args+=( --setenv "SHELL" "$(readlink $(which $SHELL))" )
+    env_args+=( --setenv "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY" "1")
+    env_args+=( --setenv "CLAUDE_CODE_USE_BEDROCK" "1")
+    env_args+=( --setenv "CLAUDE_CODE_USE_VERTEX" "1")
+    env_args+=( --setenv "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "1")
+    env_args+=( --setenv "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL" "1")
+    env_args+=( --setenv "DISABLE_AUTOUPDATER" "1")
     
     # Pass SSH_AUTH_SOCK and GPG variables if --ssh-git is enabled
     if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
@@ -303,11 +309,11 @@ let
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.0.29";
+  version = "2.0.37";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "01vy5rf8rqvfprbhqyqai13lgamp704fraw64qimwffp648474xc";
+    sha256 = "068m3psvpvclgr2clyrjfrmc2ra8ixdkkkwkvm0m90jbdz7qbid5";
   };
   
   nativeBuildInputs = [ makeWrapper ];
