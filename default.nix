@@ -239,11 +239,12 @@ let
     env_args+=( --setenv "NODE_ENV" "production" )
     env_args+=( --setenv "SHELL" "$(readlink $(which $SHELL))" )
     env_args+=( --setenv "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY" "1")
-    env_args+=( --setenv "CLAUDE_CODE_USE_BEDROCK" "1")
-    env_args+=( --setenv "CLAUDE_CODE_USE_VERTEX" "1")
     env_args+=( --setenv "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "1")
     env_args+=( --setenv "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL" "1")
     env_args+=( --setenv "DISABLE_AUTOUPDATER" "1")
+    env_args+=( --setenv "DISABLE_ERROR_REPORTING" "1")
+    env_args+=( --setenv "DISABLE_BUG_COMMAND" "1")
+    env_args+=( --setenv "DISABLE_TELEMETRY" "1")
     
     # Pass SSH_AUTH_SOCK and GPG variables if --ssh-git is enabled
     if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
