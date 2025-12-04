@@ -6,6 +6,7 @@
 , writeShellScript
 , fetchurl
 , cacert
+, ripgrep
 }:
 
 let
@@ -57,14 +58,8 @@ let
     ALLOWLIST=(
       "$SANDBOX_HOME:/home/$USER"
       "$PWD"                # current project dir (read-write)
-      "/etc/ssl"            # SSL certificates and config
-      "/etc/resolv.conf"    # DNS resolution
+      "ro:/etc"             # System configuration (read-only)
       "/nix"
-      "/etc/nix"            # Nix configuration
-      "/etc/profile"
-      "/etc/profile.local"
-      "/etc/profiles/per-user/$USER"
-      "/etc/bashrc"
       "ro:/run/current-system/sw"
       "ro:/bin/sh"
       "ro:/usr/bin/env"     # env command
@@ -310,14 +305,14 @@ let
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.0.55";
+  version = "2.0.58";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "14crmr25il0ikqg3971zwg9p36nr5zc4xfynswi70wmbh7g83bsw";
+    sha256 = "0j0qk0z9qig5ay9vx06z9cjnrrns983407idn72h5njy9djbshsf";
   };
   
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeWrapper ripgrep ];
   buildInputs = [ nodejs_22 bubblewrap cacert ];
 
   # No build phase needed
@@ -330,7 +325,19 @@ in stdenv.mkDerivation rec {
 
     # Copy package contents
     cp -r * $out/lib/node_modules/@anthropic-ai/claude-code/
-    rm -rf $out/lib/node_modules/@anthropic-ai/claude-code/{scripts,vendor}
+
+    # Create backups directory and move scripts and vendor folders
+    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/backups
+    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/scripts" ]; then
+      mv $out/lib/node_modules/@anthropic-ai/claude-code/scripts $out/lib/node_modules/@anthropic-ai/claude-code/backups/
+    fi
+    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/vendor" ]; then
+      mv $out/lib/node_modules/@anthropic-ai/claude-code/vendor $out/lib/node_modules/@anthropic-ai/claude-code/backups/
+    fi
+
+    # Create vendor/ripgrep directory and symlink rg binary
+    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux
+    ln -s ${ripgrep}/bin/rg $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg
 
     cat > $out/bin/claude-achtung-achtung << EOF
 #!/usr/bin/env node
