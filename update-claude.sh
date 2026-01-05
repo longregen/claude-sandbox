@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+WITH_LOCAL_REPO=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --with-local-repo)
+            WITH_LOCAL_REPO=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
 # Get the latest version from npm
 echo "Checking latest version of @anthropic-ai/claude-code..."
 LATEST_VERSION=$(curl -s https://registry.npmjs.org/@anthropic-ai/claude-code/latest | jq -r '.version')
@@ -36,3 +51,55 @@ echo "  Hash: updated"
 
 echo ""
 echo "You can now run 'nix build' to test the update."
+
+if [ "$WITH_LOCAL_REPO" = true ]; then
+    echo ""
+    echo "=== Local repo workflow ==="
+
+    # Step b: Run flake-lint -f
+    echo "Running flake-lint -f..."
+    flake-lint -f
+
+    # Step c: nix flake update
+    echo "Running nix flake update..."
+    nix flake update
+
+    # Step d: Git commit
+    echo "Committing changes..."
+    git add -A
+    git commit -m "chore: update to v${LATEST_VERSION}"
+
+    # Step e: Git tag
+    echo "Tagging v${LATEST_VERSION}..."
+    git tag "v${LATEST_VERSION}"
+
+    # Step f: Push to gitea
+    echo "Pushing to gitea..."
+    git push gitea main
+    git push gitea "v${LATEST_VERSION}"
+
+    # Step g: Run flake-lint -r
+    echo "Running flake-lint -r..."
+    flake-lint -r
+
+    # Step h: nix flake update
+    echo "Running nix flake update..."
+    nix flake update
+
+    # Step i: Amend commit and re-tag
+    echo "Amending commit..."
+    git add -A
+    git commit --amend --no-edit
+
+    echo "Re-tagging v${LATEST_VERSION}..."
+    git tag -d "v${LATEST_VERSION}"
+    git tag "v${LATEST_VERSION}"
+
+    # Step j: Push to origin
+    echo "Pushing to origin..."
+    git push origin main
+    git push origin "v${LATEST_VERSION}"
+
+    echo ""
+    echo "=== Local repo workflow complete ==="
+fi
