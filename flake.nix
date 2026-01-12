@@ -2,8 +2,8 @@
   description = "Claude Sandbox - Sandboxed Claude API environment using bubblewrap";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "https://github.com/NixOS/nixpkgs";
+    flake-utils.url = "https://github.com/numtide/flake-utils";
   };
 
   outputs = { self, nixpkgs, flake-utils }:
