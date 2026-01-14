@@ -18,6 +18,7 @@ let
     ENABLE_FUSE=0
     ENABLE_SSH_GIT=0
     ENABLE_LIBVIRT=0
+    ENABLE_GUI=0
     CLAUDE_ARGS=()
     
     while [[ $# -gt 0 ]]; do
@@ -32,6 +33,10 @@ let
           ;;
         --libvirt)
           ENABLE_LIBVIRT=1
+          shift
+          ;;
+        --gui)
+          ENABLE_GUI=1
           shift
           ;;
         *)
@@ -72,7 +77,7 @@ let
       ".ansible"
       ".cargo"
       ".config/claude"
-      ".config/claude-sandbox"
+      ".config/claude-sandbox.json"
       ".config/nix"
       ".cursor"
       ".docker"
@@ -182,9 +187,69 @@ let
         ALLOWLIST+=( "/run/user/$(id -u)/libvirt/libvirt-sock" )
       fi
     fi
-    
+
+    if [ "$ENABLE_GUI" -eq 1 ]; then
+      # X11 support
+      if [ -d "/tmp/.X11-unix" ]; then
+        ALLOWLIST+=( "/tmp/.X11-unix" )
+      fi
+      if [ -f "$HOME/.Xauthority" ]; then
+        ALLOWLIST+=( "$HOME/.Xauthority" )
+      fi
+
+      # Wayland support
+      if [ -n "$WAYLAND_DISPLAY" ] && [ -e "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" )
+      fi
+
+      # D-Bus session bus (needed by most GUI apps)
+      if [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/bus" )
+      fi
+
+      # GPU access for hardware acceleration
+      if [ -d "/dev/dri" ]; then
+        ALLOWLIST+=( "/dev/dri" )
+      fi
+
+      # Fonts
+      if [ -d "/usr/share/fonts" ]; then
+        ALLOWLIST+=( "ro:/usr/share/fonts" )
+      fi
+      if [ -d "/run/current-system/sw/share/fonts" ]; then
+        ALLOWLIST+=( "ro:/run/current-system/sw/share/fonts" )
+      fi
+      if [ -d "$HOME/.local/share/fonts" ]; then
+        ALLOWLIST+=( "ro:$HOME/.local/share/fonts" )
+      fi
+
+      # Icon/theme directories
+      if [ -d "/usr/share/icons" ]; then
+        ALLOWLIST+=( "ro:/usr/share/icons" )
+      fi
+      if [ -d "/run/current-system/sw/share/icons" ]; then
+        ALLOWLIST+=( "ro:/run/current-system/sw/share/icons" )
+      fi
+
+      # GTK/Qt theming
+      for theme_dir in ".config/gtk-3.0" ".config/gtk-4.0" ".config/qt5ct" ".config/qt6ct"; do
+        if [ -d "$HOME/$theme_dir" ]; then
+          ALLOWLIST+=( "ro:$HOME/$theme_dir" )
+        fi
+      done
+
+      # Audio support (PulseAudio)
+      if [ -d "$XDG_RUNTIME_DIR/pulse" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/pulse" )
+      fi
+      # Audio support (PipeWire)
+      if [ -S "$XDG_RUNTIME_DIR/pipewire-0" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/pipewire-0" )
+      fi
+    fi
+
     # Always read config file if it exists
-    CONFIG_FILE="$HOME/.config/claude-sandbox/config.json"
+    CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
     if [ -f "$CONFIG_FILE" ]; then
       # Parse the JSON config file
       if command -v jq >/dev/null 2>&1; then
@@ -206,6 +271,16 @@ let
               ALLOWLIST+=( "$HOME/$pattern" )
             fi
           done < <(jq -r '.includeHomePatterns[]? // empty' "$CONFIG_FILE" 2>/dev/null)
+
+          # Read gui option - always enable GUI if set to true
+          if jq -e '.gui == true' "$CONFIG_FILE" >/dev/null 2>&1; then
+            ENABLE_GUI=1
+          fi
+
+          # Read yolo option - add --dangerously-skip-permissions if set to true
+          if jq -e '.yolo == true' "$CONFIG_FILE" >/dev/null 2>&1; then
+            CLAUDE_ARGS+=("--dangerously-skip-permissions")
+          fi
         fi
       else
         # Fallback to basic parsing if jq is not available
@@ -251,6 +326,29 @@ let
       fi
       if [ -n "$GPG_TTY" ]; then
         env_args+=( --setenv "GPG_TTY" "$GPG_TTY" )
+      fi
+    fi
+
+    # Pass display and audio variables if --gui is enabled
+    if [ "$ENABLE_GUI" -eq 1 ]; then
+      if [ -n "$DISPLAY" ]; then
+        env_args+=( --setenv "DISPLAY" "$DISPLAY" )
+      fi
+      if [ -n "$WAYLAND_DISPLAY" ]; then
+        env_args+=( --setenv "WAYLAND_DISPLAY" "$WAYLAND_DISPLAY" )
+      fi
+      if [ -n "$XDG_RUNTIME_DIR" ]; then
+        env_args+=( --setenv "XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR" )
+      fi
+      if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
+        env_args+=( --setenv "DBUS_SESSION_BUS_ADDRESS" "$DBUS_SESSION_BUS_ADDRESS" )
+      fi
+      if [ -n "$XDG_SESSION_TYPE" ]; then
+        env_args+=( --setenv "XDG_SESSION_TYPE" "$XDG_SESSION_TYPE" )
+      fi
+      # For Qt apps on Wayland
+      if [ -n "$QT_QPA_PLATFORM" ]; then
+        env_args+=( --setenv "QT_QPA_PLATFORM" "$QT_QPA_PLATFORM" )
       fi
     fi
 
@@ -305,15 +403,11 @@ let
 
   # Script to add current directory to allowed folders
   allowDirScript = writeShellScript "claude-allow-dir" ''
-    CONFIG_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox"
-    CONFIG_FILE="$CONFIG_DIR/config.json"
-
-    # Create config directory if it doesn't exist
-    mkdir -p "$CONFIG_DIR"
+    CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
 
     # Create config file with empty structure if it doesn't exist
     if [ ! -f "$CONFIG_FILE" ]; then
-      echo '{"includeFolders":[],"includeHomePatterns":[]}' > "$CONFIG_FILE"
+      echo '{"includeFolders":[],"includeHomePatterns":[],"gui":false,"yolo":false}' > "$CONFIG_FILE"
     fi
 
     # Check if jq is available
@@ -338,8 +432,7 @@ let
 
   # Script to remove current directory from allowed folders
   forgetDirScript = writeShellScript "claude-forget-dir" ''
-    CONFIG_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox"
-    CONFIG_FILE="$CONFIG_DIR/config.json"
+    CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
 
     # Check if config file exists
     if [ ! -f "$CONFIG_FILE" ]; then
