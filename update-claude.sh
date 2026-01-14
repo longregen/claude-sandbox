@@ -75,8 +75,8 @@ if [ "$WITH_LOCAL_REPO" = true ]; then
 
     # Step f: Push to gitea
     echo "Pushing to gitea..."
-    git push gitea main
-    git push gitea "v${LATEST_VERSION}"
+    git push -f gitea main
+    git push -f gitea "v${LATEST_VERSION}"
 
     # Step g: Run flake-lint -r
     echo "Running flake-lint -r..."
@@ -97,8 +97,8 @@ if [ "$WITH_LOCAL_REPO" = true ]; then
 
     # Step j: Push to origin
     echo "Pushing to origin..."
-    git push origin main
-    git push origin "v${LATEST_VERSION}"
+    git push -f origin main
+    git push -f origin "v${LATEST_VERSION}"
 
     echo ""
     echo "=== Local repo workflow complete ==="

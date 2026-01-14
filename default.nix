@@ -303,13 +303,77 @@ let
     fi
   '';
 
+  # Script to add current directory to allowed folders
+  allowDirScript = writeShellScript "claude-allow-dir" ''
+    CONFIG_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox"
+    CONFIG_FILE="$CONFIG_DIR/config.json"
+
+    # Create config directory if it doesn't exist
+    mkdir -p "$CONFIG_DIR"
+
+    # Create config file with empty structure if it doesn't exist
+    if [ ! -f "$CONFIG_FILE" ]; then
+      echo '{"includeFolders":[],"includeHomePatterns":[]}' > "$CONFIG_FILE"
+    fi
+
+    # Check if jq is available
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "Error: jq is required but not found. Please install jq." >&2
+      exit 1
+    fi
+
+    # Get absolute path of current directory
+    DIR="$(pwd)"
+
+    # Check if directory is already in the list
+    if jq -e --arg dir "$DIR" '.includeFolders | index($dir) != null' "$CONFIG_FILE" >/dev/null 2>&1; then
+      echo "Directory already allowed: $DIR"
+      exit 0
+    fi
+
+    # Add directory to includeFolders
+    jq --arg dir "$DIR" '.includeFolders += [$dir]' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    echo "Added to allowed directories: $DIR"
+  '';
+
+  # Script to remove current directory from allowed folders
+  forgetDirScript = writeShellScript "claude-forget-dir" ''
+    CONFIG_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox"
+    CONFIG_FILE="$CONFIG_DIR/config.json"
+
+    # Check if config file exists
+    if [ ! -f "$CONFIG_FILE" ]; then
+      echo "No config file found at: $CONFIG_FILE"
+      exit 0
+    fi
+
+    # Check if jq is available
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "Error: jq is required but not found. Please install jq." >&2
+      exit 1
+    fi
+
+    # Get absolute path of current directory
+    DIR="$(pwd)"
+
+    # Check if directory is in the list
+    if ! jq -e --arg dir "$DIR" '.includeFolders | index($dir) != null' "$CONFIG_FILE" >/dev/null 2>&1; then
+      echo "Directory not in allowed list: $DIR"
+      exit 0
+    fi
+
+    # Remove directory from includeFolders
+    jq --arg dir "$DIR" '.includeFolders = (.includeFolders | map(select(. != $dir)))' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    echo "Removed from allowed directories: $DIR"
+  '';
+
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.1.5";
+  version = "2.1.7";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "0lpd1kq5sanx764j4rvbgki5ljsbc6ygip716b4c17s6mf88d5d4";
+    sha256 = "0x6q3v4gi05zzbg19za4a5lz6w1aaprgp24irkkqcv94ajgcg9w9";
   };
   
   nativeBuildInputs = [ makeWrapper ripgrep ];
@@ -354,6 +418,12 @@ EOF
 
     # Alias the sandboxed claude to the original claude
     ln -s $out/bin/claude-sandbox $out/bin/claude
+
+    # Install helper scripts for managing allowed directories
+    cp ${allowDirScript} $out/bin/claude-allow-dir
+    chmod +x $out/bin/claude-allow-dir
+    cp ${forgetDirScript} $out/bin/claude-forget-dir
+    chmod +x $out/bin/claude-forget-dir
 
     # Substitute the $out placeholder with actual output path
     substituteInPlace $out/bin/claude-sandbox \
