@@ -19,6 +19,7 @@ let
     ENABLE_SSH_GIT=0
     ENABLE_LIBVIRT=0
     ENABLE_GUI=0
+    ENABLE_NVIDIA=0
     CLAUDE_ARGS=()
     
     while [[ $# -gt 0 ]]; do
@@ -37,6 +38,10 @@ let
           ;;
         --gui)
           ENABLE_GUI=1
+          shift
+          ;;
+        --nvidia)
+          ENABLE_NVIDIA=1
           shift
           ;;
         *)
@@ -248,6 +253,29 @@ let
       fi
     fi
 
+    if [ "$ENABLE_NVIDIA" -eq 1 ]; then
+      # NVIDIA control devices
+      for dev in /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/nvidia-uvm-tools; do
+        if [ -e "$dev" ]; then
+          ALLOWLIST+=( "$dev" )
+        fi
+      done
+      # NVIDIA GPU devices (nvidia0, nvidia1, ...)
+      for dev in /dev/nvidia[0-9]*; do
+        if [ -c "$dev" ]; then
+          ALLOWLIST+=( "$dev" )
+        fi
+      done
+      # NVIDIA caps
+      if [ -d "/dev/nvidia-caps" ]; then
+        ALLOWLIST+=( "/dev/nvidia-caps" )
+      fi
+      # OpenGL/CUDA driver libraries
+      if [ -d "/run/opengl-driver" ]; then
+        ALLOWLIST+=( "ro:/run/opengl-driver" )
+      fi
+    fi
+
     # Always read config file if it exists
     CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
     if [ -f "$CONFIG_FILE" ]; then
@@ -275,6 +303,11 @@ let
           # Read gui option - always enable GUI if set to true
           if jq -e '.gui == true' "$CONFIG_FILE" >/dev/null 2>&1; then
             ENABLE_GUI=1
+          fi
+
+          # Read nvidia option - always enable NVIDIA GPU access if set to true
+          if jq -e '.nvidia == true' "$CONFIG_FILE" >/dev/null 2>&1; then
+            ENABLE_NVIDIA=1
           fi
 
           # Read yolo option - add --dangerously-skip-permissions if set to true
@@ -349,6 +382,14 @@ let
       # For Qt apps on Wayland
       if [ -n "$QT_QPA_PLATFORM" ]; then
         env_args+=( --setenv "QT_QPA_PLATFORM" "$QT_QPA_PLATFORM" )
+      fi
+    fi
+
+    # Pass NVIDIA/CUDA variables if --nvidia is enabled
+    if [ "$ENABLE_NVIDIA" -eq 1 ]; then
+      env_args+=( --setenv "LD_LIBRARY_PATH" "/run/opengl-driver/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" )
+      if [ -n "$CUDA_VISIBLE_DEVICES" ]; then
+        env_args+=( --setenv "CUDA_VISIBLE_DEVICES" "$CUDA_VISIBLE_DEVICES" )
       fi
     fi
 
