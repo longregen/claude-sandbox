@@ -650,11 +650,11 @@ NSEOF
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.1.20";
+  version = "2.1.31";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "0jghdvs05rrd90pvc93ak432idp35353996z68zzvj1d4jgp4g6y";
+    sha256 = "1l8ivy79li1a1cyailp1cdcd91fgicfxwm42ymzr0wxx511xr6k1";
   };
   
   nativeBuildInputs = [ makeWrapper ripgrep ];
