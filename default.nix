@@ -161,8 +161,8 @@ let
       if [ -d "/run/user/$(id -u)" ]; then
         ALLOWLIST+=( "/run/user/$(id -u)" )
       fi
-      # Allow access to /dev/fuse for FUSE operations
-      ALLOWLIST+=( "/dev/fuse" )
+      # Allow access to /dev/fuse for FUSE operations (dev: prefix for device access)
+      ALLOWLIST+=( "dev:/dev/fuse" )
     fi
     
     if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
@@ -230,9 +230,9 @@ let
         ALLOWLIST+=( "$XDG_RUNTIME_DIR/bus" )
       fi
 
-      # GPU access for hardware acceleration
+      # GPU access for hardware acceleration (dev: prefix for device access)
       if [ -d "/dev/dri" ]; then
-        ALLOWLIST+=( "/dev/dri" )
+        ALLOWLIST+=( "dev:/dev/dri" )
       fi
 
       # Fonts
@@ -272,21 +272,21 @@ let
     fi
 
     if [ "$ENABLE_NVIDIA" -eq 1 ]; then
-      # NVIDIA control devices
+      # NVIDIA control devices (dev: prefix for device access)
       for dev in /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/nvidia-uvm-tools; do
         if [ -e "$dev" ]; then
-          ALLOWLIST+=( "$dev" )
+          ALLOWLIST+=( "dev:$dev" )
         fi
       done
       # NVIDIA GPU devices (nvidia0, nvidia1, ...)
       for dev in /dev/nvidia[0-9]*; do
         if [ -c "$dev" ]; then
-          ALLOWLIST+=( "$dev" )
+          ALLOWLIST+=( "dev:$dev" )
         fi
       done
       # NVIDIA caps
       if [ -d "/dev/nvidia-caps" ]; then
-        ALLOWLIST+=( "/dev/nvidia-caps" )
+        ALLOWLIST+=( "dev:/dev/nvidia-caps" )
       fi
       # OpenGL/CUDA driver libraries
       if [ -d "/run/opengl-driver" ]; then
@@ -295,13 +295,13 @@ let
     fi
 
     if [ "$ENABLE_KVM" -eq 1 ]; then
-      # KVM virtualization device
+      # KVM virtualization device (dev: prefix for device access)
       if [ -c "/dev/kvm" ]; then
-        ALLOWLIST+=( "/dev/kvm" )
+        ALLOWLIST+=( "dev:/dev/kvm" )
       fi
       # VFIO devices for device passthrough
       if [ -d "/dev/vfio" ]; then
-        ALLOWLIST+=( "/dev/vfio" )
+        ALLOWLIST+=( "dev:/dev/vfio" )
       fi
     fi
 
@@ -470,9 +470,15 @@ let
 
     for p in "''${ALLOWLIST[@]}"; do
       if [[ "$p" == ro:* ]]; then
-        p="''${p#ro:}"; 
+        p="''${p#ro:}";
         if [ -e "$p" ]; then
           args+=( --ro-bind "$p" "$p" )
+        fi
+      elif [[ "$p" == dev:* ]]; then
+        # Device nodes need --dev-bind (no MS_NODEV flag) to allow device access
+        p="''${p#dev:}"
+        if [ -e "$p" ]; then
+          args+=( --dev-bind "$p" "$p" )
         fi
       elif [[ "$p" == *:* ]]; then
         source="''${p%%:*}"
