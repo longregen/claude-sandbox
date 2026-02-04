@@ -7,6 +7,10 @@
 , fetchurl
 , cacert
 , ripgrep
+, tun2socks
+, slirp4netns
+, iproute2
+, util-linux
 }:
 
 let
@@ -20,6 +24,8 @@ let
     ENABLE_LIBVIRT=0
     ENABLE_GUI=0
     ENABLE_NVIDIA=0
+    ENABLE_KVM=0
+    SOCKS_PROXY=""
     CLAUDE_ARGS=()
     
     while [[ $# -gt 0 ]]; do
@@ -44,6 +50,18 @@ let
           ENABLE_NVIDIA=1
           shift
           ;;
+        --kvm)
+          ENABLE_KVM=1
+          shift
+          ;;
+        --socks-proxy)
+          SOCKS_PROXY="$2"
+          shift 2
+          ;;
+        --socks-proxy=*)
+          SOCKS_PROXY="''${1#*=}"
+          shift
+          ;;
         *)
           CLAUDE_ARGS+=("$1")
           shift
@@ -54,7 +72,7 @@ let
     # Create isolated sandbox home directory
     SANDBOX_HOME="/tmp/claude-sandbox-home-$$"
     SANDBOX_TMP="/tmp/claude-sandbox-tmp-$$"
-    trap 'rm -rf "$SANDBOX_HOME" "$SANDBOX_TMP"' EXIT
+    trap 'rm -rf "$SANDBOX_HOME" "$SANDBOX_TMP"; rm -f "/tmp/claude-socks-$$" "/tmp/claude-socks-ns-$$"' EXIT
 
     mkdir -p "$SANDBOX_TMP"
     mkdir -p "$SANDBOX_HOME"
@@ -276,6 +294,17 @@ let
       fi
     fi
 
+    if [ "$ENABLE_KVM" -eq 1 ]; then
+      # KVM virtualization device
+      if [ -c "/dev/kvm" ]; then
+        ALLOWLIST+=( "/dev/kvm" )
+      fi
+      # VFIO devices for device passthrough
+      if [ -d "/dev/vfio" ]; then
+        ALLOWLIST+=( "/dev/vfio" )
+      fi
+    fi
+
     # Always read config file if it exists
     CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
     if [ -f "$CONFIG_FILE" ]; then
@@ -310,9 +339,22 @@ let
             ENABLE_NVIDIA=1
           fi
 
+          # Read kvm option - enable KVM virtualization access if set to true
+          if jq -e '.kvm == true' "$CONFIG_FILE" >/dev/null 2>&1; then
+            ENABLE_KVM=1
+          fi
+
           # Read yolo option - add --dangerously-skip-permissions if set to true
           if jq -e '.yolo == true' "$CONFIG_FILE" >/dev/null 2>&1; then
             CLAUDE_ARGS+=("--dangerously-skip-permissions")
+          fi
+
+          # Read socksProxy option - force all traffic through a SOCKS proxy
+          if [ -z "$SOCKS_PROXY" ]; then
+            _cfg_proxy=$(jq -r '.socksProxy // empty' "$CONFIG_FILE" 2>/dev/null)
+            if [ -n "$_cfg_proxy" ]; then
+              SOCKS_PROXY="$_cfg_proxy"
+            fi
           fi
         fi
       else
@@ -393,18 +435,31 @@ let
       fi
     fi
 
+    # Normalise SOCKS_PROXY into a socks5:// URL
+    if [ -n "$SOCKS_PROXY" ]; then
+      case "$SOCKS_PROXY" in
+        socks5://*|socks://*) ;; # already a URL
+        :*) SOCKS_PROXY="socks5://127.0.0.1$SOCKS_PROXY" ;;  # :port shorthand
+        *:*) SOCKS_PROXY="socks5://$SOCKS_PROXY" ;;           # host:port
+        *) SOCKS_PROXY="socks5://$SOCKS_PROXY" ;;
+      esac
+    fi
+
     # Build bwrap argument list
     args=(
-      --unshare-all                         # isolate every namespace except network
-      --unshare-user                        # isolate user namespace
-      --unshare-pid                         # isolate pid namespace
-      --unshare-uts                         # isolate uts namespace
-      --unshare-ipc                         # isolate ipc namespace
-      --share-net                           # keep Internet access for API calls
       --die-with-parent                     # auto-kill if parent shell exits
-      --proc /proc --dev /dev               # minimal /proc and /dev
       --ro-bind /nix /nix                   # Nix store read-only
     )
+
+    if [ -n "$SOCKS_PROXY" ]; then
+      # In SOCKS mode we're already inside unshare --user --net.
+      # Bind-mount /proc and /dev from the namespace so network info is visible.
+      # Still isolate PID/IPC/UTS namespaces for security.
+      args+=( --ro-bind /proc /proc --dev /dev --unshare-pid --unshare-ipc --unshare-uts )
+    else
+      # Normal mode: fresh /proc, isolate everything, share host network.
+      args+=( --proc /proc --dev /dev --unshare-all --share-net )
+    fi
 
     # Create /usr/bin directory and bind node
     args+=(
@@ -432,13 +487,105 @@ let
       fi
     done
 
-    # Use the claude executable from the npm package
-    if [ $DRY_RUN ]; then
-      echo ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "''${CLAUDE_ARGS[@]}"
-    elif [ $START_SHELL ]; then
-      exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- $(readlink $(which $SHELL))
+    # Determine bwrap target binary
+    if [ $START_SHELL ]; then
+      BWRAP_TARGET=$(readlink $(which $SHELL))
     else
-      exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "''${CLAUDE_ARGS[@]}"
+      BWRAP_TARGET="$out/bin/claude-achtung-achtung"
+    fi
+
+    if [ -n "$SOCKS_PROXY" ]; then
+      # Parse proxy host for route exclusion (avoid routing loop)
+      PROXY_HOST=$(echo "$SOCKS_PROXY" | sed -E 's|socks5?://||;s|:[0-9]+$||')
+
+      # Validate PROXY_HOST to prevent command injection
+      if ! [[ "$PROXY_HOST" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "Error: Invalid proxy host: $PROXY_HOST" >&2
+        exit 1
+      fi
+
+      # FIFO for parent→child coordination (PID-suffixed)
+      COORD_FIFO="/tmp/claude-socks-$$"
+      mkfifo "$COORD_FIFO"
+
+      # Build the quoted bwrap command for embedding in the namespace script
+      BWRAP_QUOTED=$(printf '%q ' ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$BWRAP_TARGET" "''${CLAUDE_ARGS[@]}")
+
+      # Write the inner namespace script to a temp file to avoid quoting issues
+      NS_SCRIPT="/tmp/claude-socks-ns-$$"
+      cat > "$NS_SCRIPT" <<NSEOF
+#!/usr/bin/env bash
+rm -f "$NS_SCRIPT"
+# Wait for slirp4netns to attach tap0
+read < "$COORD_FIFO"
+rm -f "$COORD_FIFO"
+
+# Bring up loopback
+${iproute2}/bin/ip link set dev lo up
+
+# Create TUN device for tun2socks
+${iproute2}/bin/ip tuntap add mode tun dev tunclaude
+${iproute2}/bin/ip addr add 198.18.0.1/15 dev tunclaude
+${iproute2}/bin/ip link set dev tunclaude up
+
+# Route proxy host via slirp gateway to avoid routing loop
+${iproute2}/bin/ip route add $PROXY_HOST via 10.0.2.2 dev tap0
+
+# Default route through TUN -> tun2socks -> SOCKS proxy
+# (replaces the default route that slirp4netns --configure created)
+${iproute2}/bin/ip route replace default dev tunclaude
+
+# Start tun2socks in background (redirect output so it doesn't hold pipes open)
+${tun2socks}/bin/tun2socks -device tunclaude -proxy "$SOCKS_PROXY" > /dev/null 2>&1 &
+TUN2SOCKS_PID=\$!
+trap "kill \$TUN2SOCKS_PID 2>/dev/null" EXIT
+
+# Small delay to let tun2socks bind
+sleep 0.3
+
+# Run bwrap inside this namespace (use wait instead of exec so trap fires)
+$BWRAP_QUOTED
+
+NSEOF
+      chmod +x "$NS_SCRIPT"
+
+      # Launch isolated user+net namespace (preserve stdin with <&0)
+      ${util-linux}/bin/unshare --user --map-root-user --net -- bash "$NS_SCRIPT" <&0 &
+      NS_PID=$!
+
+      # Create pipe for slirp4netns ready signal
+      exec {SLIRP_READY_FD}<> <(:)
+
+      # From parent: attach slirp4netns to give the namespace NAT connectivity
+      ${slirp4netns}/bin/slirp4netns --configure --mtu=65520 --ready-fd=$SLIRP_READY_FD $NS_PID tap0 &
+      SLIRP_PID=$!
+
+      # Set up trap to clean up slirp4netns on exit
+      trap 'kill $SLIRP_PID 2>/dev/null; rm -f "$COORD_FIFO"' EXIT
+
+      # Wait for slirp4netns to signal ready (reads until EOF or data)
+      read -t 5 -u $SLIRP_READY_FD || true
+      exec {SLIRP_READY_FD}<&-
+
+      # Signal child that tap0 is ready
+      echo "ready" > "$COORD_FIFO"
+
+      # Wait for namespace (bwrap) to finish, then clean up
+      wait $NS_PID 2>/dev/null
+      EXIT_CODE=$?
+      kill $SLIRP_PID 2>/dev/null
+      rm -f "$COORD_FIFO"
+      trap - EXIT
+      exit $EXIT_CODE
+    else
+      # Normal (non-SOCKS) path
+      if [ $DRY_RUN ]; then
+        echo ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$BWRAP_TARGET" "''${CLAUDE_ARGS[@]}"
+      elif [ $START_SHELL ]; then
+        exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$BWRAP_TARGET"
+      else
+        exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$BWRAP_TARGET" "''${CLAUDE_ARGS[@]}"
+      fi
     fi
   '';
 
@@ -511,7 +658,7 @@ in stdenv.mkDerivation rec {
   };
   
   nativeBuildInputs = [ makeWrapper ripgrep ];
-  buildInputs = [ nodejs_22 bubblewrap cacert ];
+  buildInputs = [ nodejs_22 bubblewrap cacert tun2socks slirp4netns iproute2 util-linux ];
 
   # No build phase needed
   dontBuild = true;

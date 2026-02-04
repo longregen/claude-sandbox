@@ -36,6 +36,10 @@
           };
         };
 
+        checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          sandbox-test = import ./tests/sandbox.nix { inherit pkgs claude-sandbox; };
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             claude-sandbox
