@@ -25,7 +25,9 @@ let
     ENABLE_GUI=0
     ENABLE_NVIDIA=0
     ENABLE_KVM=0
+    ENABLE_AUDIO=0
     SOCKS_PROXY=""
+    EXTRA_ENVS=()
     CLAUDE_ARGS=()
     
     while [[ $# -gt 0 ]]; do
@@ -52,6 +54,18 @@ let
           ;;
         --kvm)
           ENABLE_KVM=1
+          shift
+          ;;
+        --audio)
+          ENABLE_AUDIO=1
+          shift
+          ;;
+        --env)
+          EXTRA_ENVS+=("$2")
+          shift 2
+          ;;
+        --env=*)
+          EXTRA_ENVS+=("''${1#*=}")
           shift
           ;;
         --socks-proxy)
@@ -305,6 +319,25 @@ let
       fi
     fi
 
+    if [ "$ENABLE_AUDIO" -eq 1 ]; then
+      # PulseAudio socket
+      if [ -d "$XDG_RUNTIME_DIR/pulse" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/pulse" )
+      fi
+      # PipeWire socket
+      if [ -S "$XDG_RUNTIME_DIR/pipewire-0" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/pipewire-0" )
+      fi
+      # ALSA devices (for QEMU_AUDIO_DRV=alsa backend)
+      if [ -d "/dev/snd" ]; then
+        ALLOWLIST+=( "dev:/dev/snd" )
+      fi
+      # D-Bus session bus (PulseAudio often needs it)
+      if [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/bus" )
+      fi
+    fi
+
     # Always read config file if it exists
     CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
     if [ -f "$CONFIG_FILE" ]; then
@@ -343,6 +376,16 @@ let
           if jq -e '.kvm == true' "$CONFIG_FILE" >/dev/null 2>&1; then
             ENABLE_KVM=1
           fi
+
+          # Read audio option - enable headless audio support if set to true
+          if jq -e '.audio == true' "$CONFIG_FILE" >/dev/null 2>&1; then
+            ENABLE_AUDIO=1
+          fi
+
+          # Read extraEnvs - pass arbitrary environment variables into the sandbox
+          while IFS= read -r env_pair; do
+            EXTRA_ENVS+=("$env_pair")
+          done < <(jq -r '.extraEnvs[]? // empty' "$CONFIG_FILE" 2>/dev/null)
 
           # Read yolo option - add --dangerously-skip-permissions if set to true
           if jq -e '.yolo == true' "$CONFIG_FILE" >/dev/null 2>&1; then
@@ -427,6 +470,19 @@ let
       fi
     fi
 
+    # Pass audio-related variables if --audio is enabled
+    if [ "$ENABLE_AUDIO" -eq 1 ]; then
+      if [ -n "$XDG_RUNTIME_DIR" ]; then
+        env_args+=( --setenv "XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR" )
+      fi
+      if [ -n "$PULSE_SERVER" ]; then
+        env_args+=( --setenv "PULSE_SERVER" "$PULSE_SERVER" )
+      fi
+      if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
+        env_args+=( --setenv "DBUS_SESSION_BUS_ADDRESS" "$DBUS_SESSION_BUS_ADDRESS" )
+      fi
+    fi
+
     # Pass NVIDIA/CUDA variables if --nvidia is enabled
     if [ "$ENABLE_NVIDIA" -eq 1 ]; then
       env_args+=( --setenv "LD_LIBRARY_PATH" "/run/opengl-driver/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" )
@@ -434,6 +490,15 @@ let
         env_args+=( --setenv "CUDA_VISIBLE_DEVICES" "$CUDA_VISIBLE_DEVICES" )
       fi
     fi
+
+    # Pass arbitrary environment variables from --env flags and config extraEnvs
+    for env_pair in "''${EXTRA_ENVS[@]}"; do
+      env_key="''${env_pair%%=*}"
+      env_val="''${env_pair#*=}"
+      if [ -n "$env_key" ]; then
+        env_args+=( --setenv "$env_key" "$env_val" )
+      fi
+    done
 
     # Normalise SOCKS_PROXY into a socks5:// URL
     if [ -n "$SOCKS_PROXY" ]; then
