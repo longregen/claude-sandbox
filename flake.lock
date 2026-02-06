@@ -7,31 +7,30 @@
       "locked": {
         "lastModified": 1731533236,
         "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
-        "ref": "refs/heads/main",
+        "owner": "numtide",
+        "repo": "flake-utils",
         "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
-        "revCount": 102,
-        "type": "git",
-        "url": "ssh://gitea/mirrors/flake-utils"
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "ssh://gitea/mirrors/flake-utils"
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
       }
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1769298235,
-        "narHash": "sha256-6LYNeTHX7779CiR4oqhG4C6u2NIUeZUOfITHgywaRlQ=",
-        "ref": "refs/heads/master",
-        "rev": "26b0093bc977081dc7653175a3fadab11e07bed7",
-        "shallow": true,
-        "type": "git",
-        "url": "ssh://gitea/mirrors/nixpkgs"
+        "lastModified": 1770348683,
+        "narHash": "sha256-GepZmsfQRIeD+CX3x0uE/uVZ0K9XQ3ZBC6q5UPOWE1g=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "565e4d68bd3e0b2a41e64453d50d38010c7d9da0",
+        "type": "github"
       },
       "original": {
-        "shallow": true,
-        "type": "git",
-        "url": "ssh://gitea/mirrors/nixpkgs"
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "type": "github"
       }
     },
     "root": {
