@@ -721,11 +721,11 @@ NSEOF
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.1.33";
+  version = "2.1.42";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "0m0hjbajhas9pz6hznijii0vax357fgaqdbxsvpp5cqlnyh8va7r";
+    sha256 = "14vi1h1hzklyin9yg8r6n89qmwfn2n6p1j24373cvaar3axspxk5";
   };
   
   nativeBuildInputs = [ makeWrapper ripgrep ];
