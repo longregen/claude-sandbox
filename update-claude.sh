@@ -27,15 +27,6 @@ if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
     echo "  Version: $CURRENT_VERSION -> $LATEST_VERSION"
 fi
 
-echo "Running flake-lint -f..."
-flake-lint -f
-
-echo "Running nix flake update..."
-nix flake update
-
-echo "Running flake-lint -r..."
-flake-lint -r
-
 echo "Running nix flake update..."
 nix flake update
 
