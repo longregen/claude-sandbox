@@ -1,12 +1,10 @@
 { lib
 , stdenv
-, nodejs_22
 , bubblewrap
-, makeWrapper
 , writeShellScript
 , fetchurl
 , cacert
-, ripgrep
+, autoPatchelfHook
 , tun2socks
 , slirp4netns
 , iproute2
@@ -97,7 +95,21 @@ let
     mkdir -p "$SANDBOX_HOME"
     mkdir -p "$SANDBOX_HOME/.cache"
     mkdir -p "$SANDBOX_HOME/.config"
-    # Make sure the working directory path exists in the sandbox  
+    mkdir -p "$SANDBOX_HOME/.local/bin"
+    ln -s "$out/bin/claude-achtung-achtung" "$SANDBOX_HOME/.local/bin/claude"
+    # Seed installMethod so `claude doctor` doesn't warn about unknown install
+    mkdir -p "$HOME/.claude"
+    CLAUDE_CFG="$HOME/.claude/.config.json"
+    if [ -f "$CLAUDE_CFG" ]; then
+      if command -v jq >/dev/null 2>&1; then
+        if ! jq -e '.installMethod == "native"' "$CLAUDE_CFG" >/dev/null 2>&1; then
+          jq '.installMethod = "native" | .autoUpdates = false' "$CLAUDE_CFG" > "$CLAUDE_CFG.tmp" && mv "$CLAUDE_CFG.tmp" "$CLAUDE_CFG"
+        fi
+      fi
+    else
+      echo '{"installMethod":"native","autoUpdates":false}' > "$CLAUDE_CFG"
+    fi
+    # Make sure the working directory path exists in the sandbox
     mkdir -p "$SANDBOX_HOME/$(echo "$PWD" | sed "s|^/home/$USER||")"
     USER=$(whoami)
     
@@ -412,9 +424,9 @@ let
             EXTRA_ENVS+=("$env_pair")
           done < <(jq -r '.extraEnvs[]? // empty' "$CONFIG_FILE" 2>/dev/null)
 
-          # Read yolo option - add --dangerously-skip-permissions if set to true
+          # Read yolo option - enable skipping all permission checks
           if jq -e '.yolo == true' "$CONFIG_FILE" >/dev/null 2>&1; then
-            CLAUDE_ARGS+=("--dangerously-skip-permissions")
+            CLAUDE_ARGS+=("--allow-dangerously-skip-permissions" "--dangerously-skip-permissions")
           fi
 
           # Read socksProxy option - force all traffic through a SOCKS proxy
@@ -449,6 +461,7 @@ let
         env_args+=( --setenv "$env" "''${!env}" )
       fi
     done
+    env_args+=( --setenv "PATH" "/home/$USER/.local/bin:$PATH" )
     env_args+=( --setenv "NODE_ENV" "production" )
     env_args+=( --setenv "SHELL" "$(readlink $(which $SHELL))" )
     env_args+=( --setenv "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY" "1")
@@ -751,50 +764,48 @@ NSEOF
     echo "Removed from allowed directories: $DIR"
   '';
 
+  gcsBase = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
+
+  # Wrapper that sets SSL certificates for Nix before exec-ing the native binary
+  claudeWrapper = writeShellScript "claude-achtung-achtung" ''
+    export SSL_CERT_FILE="''${SSL_CERT_FILE:-${cacert}/etc/ssl/certs/ca-bundle.crt}"
+    export NIX_SSL_CERT_FILE="''${NIX_SSL_CERT_FILE:-${cacert}/etc/ssl/certs/ca-bundle.crt}"
+    export CURL_CA_BUNDLE="''${CURL_CA_BUNDLE:-${cacert}/etc/ssl/certs/ca-bundle.crt}"
+    exec @claude_native@ "$@"
+  '';
+
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
   version = "2.1.47";
 
+  # Native binary from Anthropic's GCS distribution bucket
   src = fetchurl {
-    url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "0qiq1ajn6dh0li0c5fxbak9hag4l4x4d1yi9y8059wqaah6nhap0";
+    url = "${gcsBase}/${version}/linux-x64/claude";
+    sha256 = "18vlik4k4b97rknmb29afb75i911ivvs8pfnqdjls9ysggkbsj4w";
   };
-  
-  nativeBuildInputs = [ makeWrapper ripgrep ];
-  buildInputs = [ nodejs_22 bubblewrap cacert tun2socks slirp4netns iproute2 util-linux ];
 
-  # No build phase needed
+  dontUnpack = true;
   dontBuild = true;
+  # The native binary is a Bun SEA with Claude Code appended after the ELF.
+  # Nix's strip phase destroys the embedded application data.
+  dontStrip = true;
+
+  # autoPatchelfHook fixes the ELF interpreter for NixOS
+  nativeBuildInputs = [ autoPatchelfHook ];
+  buildInputs = [ stdenv.cc.cc.lib bubblewrap cacert tun2socks slirp4netns iproute2 util-linux ];
 
   installPhase = ''
-    # Create directories
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code
     mkdir -p $out/bin
 
-    # Copy package contents
-    cp -r * $out/lib/node_modules/@anthropic-ai/claude-code/
+    # Install the native Claude Code binary
+    cp $src $out/bin/claude-native
+    chmod +x $out/bin/claude-native
 
-    # Create backups directory and move scripts and vendor folders
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/backups
-    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/scripts" ]; then
-      mv $out/lib/node_modules/@anthropic-ai/claude-code/scripts $out/lib/node_modules/@anthropic-ai/claude-code/backups/
-    fi
-    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/vendor" ]; then
-      mv $out/lib/node_modules/@anthropic-ai/claude-code/vendor $out/lib/node_modules/@anthropic-ai/claude-code/backups/
-    fi
-
-    # Create vendor/ripgrep directory and symlink rg binary
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux
-    ln -s ${ripgrep}/bin/rg $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg
-
-    cat > $out/bin/claude-achtung-achtung << EOF
-#!/usr/bin/env node
-process.env.SSL_CERT_FILE = process.env.SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.NIX_SSL_CERT_FILE = process.env.NIX_SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.CURL_CA_BUNDLE = process.env.CURL_CA_BUNDLE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-import('$out/lib/node_modules/@anthropic-ai/claude-code/cli.js');
-EOF
+    # Install SSL-cert wrapper (writeShellScript gives us a proper Nix shebang)
+    cp ${claudeWrapper} $out/bin/claude-achtung-achtung
     chmod +x $out/bin/claude-achtung-achtung
+    substituteInPlace $out/bin/claude-achtung-achtung \
+      --replace '@claude_native@' "$out/bin/claude-native"
 
     # Create our sandboxed wrapper
     cp ${sandboxWrapper} $out/bin/claude-sandbox
@@ -819,7 +830,7 @@ EOF
     homepage = "https://github.com/anthropics/claude-code";
     license = licenses.mit;
     maintainers = [ ];
-    platforms = platforms.linux;
+    platforms = [ "x86_64-linux" ];
     mainProgram = "claude-sandbox";
   };
 }

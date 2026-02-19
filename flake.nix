@@ -30,7 +30,7 @@
           update-claude = {
             type = "app";
             program = "${pkgs.writeShellScript "update-claude" ''
-              export PATH=${pkgs.lib.makeBinPath [ pkgs.curl pkgs.jq pkgs.nix pkgs.gnused ]}:$PATH
+              export PATH=${pkgs.lib.makeBinPath [ pkgs.curl pkgs.jq pkgs.nix pkgs.gnused pkgs.coreutils ]}:$PATH
               exec ${./update-claude.sh}
             ''}";
           };
@@ -41,13 +41,12 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
+          buildInputs = [
             claude-sandbox
-            nodejs_22
           ];
-          
+
           shellHook = ''
-            echo "🤖 Claude Sandbox Development Environment"
+            echo "Claude Sandbox Development Environment"
           '';
         };
       });
