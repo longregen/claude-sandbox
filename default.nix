@@ -26,6 +26,7 @@ let
     ENABLE_NVIDIA=0
     ENABLE_KVM=0
     ENABLE_AUDIO=0
+    ENABLE_DOCKER=0
     SOCKS_PROXY=""
     EXTRA_ENVS=()
     CLAUDE_ARGS=()
@@ -58,6 +59,10 @@ let
           ;;
         --audio)
           ENABLE_AUDIO=1
+          shift
+          ;;
+        --docker)
+          ENABLE_DOCKER=1
           shift
           ;;
         --env)
@@ -338,6 +343,21 @@ let
       fi
     fi
 
+    if [ "$ENABLE_DOCKER" -eq 1 ]; then
+      # Docker daemon socket
+      if [ -S "/var/run/docker.sock" ]; then
+        ALLOWLIST+=( "/var/run/docker.sock" )
+      fi
+      # Alternate socket path
+      if [ -S "/run/docker.sock" ]; then
+        ALLOWLIST+=( "/run/docker.sock" )
+      fi
+      # Rootless Docker (user-scoped socket)
+      if [ -S "$XDG_RUNTIME_DIR/docker.sock" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/docker.sock" )
+      fi
+    fi
+
     # Always read config file if it exists
     CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
     if [ -f "$CONFIG_FILE" ]; then
@@ -380,6 +400,11 @@ let
           # Read audio option - enable headless audio support if set to true
           if jq -e '.audio == true' "$CONFIG_FILE" >/dev/null 2>&1; then
             ENABLE_AUDIO=1
+          fi
+
+          # Read docker option - enable Docker daemon access if set to true
+          if jq -e '.docker == true' "$CONFIG_FILE" >/dev/null 2>&1; then
+            ENABLE_DOCKER=1
           fi
 
           # Read extraEnvs - pass arbitrary environment variables into the sandbox
@@ -480,6 +505,13 @@ let
       fi
       if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
         env_args+=( --setenv "DBUS_SESSION_BUS_ADDRESS" "$DBUS_SESSION_BUS_ADDRESS" )
+      fi
+    fi
+
+    # Pass DOCKER_HOST env var if --docker is enabled
+    if [ "$ENABLE_DOCKER" -eq 1 ]; then
+      if [ -n "$DOCKER_HOST" ]; then
+        env_args+=( --setenv "DOCKER_HOST" "$DOCKER_HOST" )
       fi
     fi
 
@@ -721,11 +753,11 @@ NSEOF
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.1.42";
+  version = "2.1.47";
 
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "14vi1h1hzklyin9yg8r6n89qmwfn2n6p1j24373cvaar3axspxk5";
+    sha256 = "0qiq1ajn6dh0li0c5fxbak9hag4l4x4d1yi9y8059wqaah6nhap0";
   };
   
   nativeBuildInputs = [ makeWrapper ripgrep ];
