@@ -112,6 +112,17 @@ let
     # Make sure the working directory path exists in the sandbox
     mkdir -p "$SANDBOX_HOME/$(echo "$PWD" | sed "s|^/home/$USER||")"
     USER=$(whoami)
+
+    # Fix SSH inside bubblewrap: Nix store files appear as nobody:nogroup
+    # in the user namespace, causing SSH to reject system config includes
+    # (e.g. systemd's 20-systemd-ssh-proxy.conf). Generate a cleaned
+    # ssh_config that strips Include directives pointing into /nix/store.
+    CLEAN_SSH_CONFIG="$SANDBOX_TMP/ssh_config"
+    if [ -f /etc/ssh/ssh_config ]; then
+      sed '/^[[:space:]]*Include.*\/nix\/store/d' /etc/ssh/ssh_config > "$CLEAN_SSH_CONFIG"
+    else
+      touch "$CLEAN_SSH_CONFIG"
+    fi
     
     # Only allow access to current project directory and essential system files
     ALLOWLIST=(
@@ -226,6 +237,7 @@ let
       if [ -S "/run/user/$(id -u)/gnupg/S.gpg-agent" ]; then
         ALLOWLIST+=( "/run/user/$(id -u)/gnupg/S.gpg-agent" )
       fi
+
     fi
     
     if [ "$ENABLE_LIBVIRT" -eq 1 ]; then
@@ -602,6 +614,12 @@ let
         fi
       fi
     done
+
+    # Override system ssh_config inside the sandbox with the cleaned version
+    # (must come after /etc is mounted so this overlays the original file)
+    if [ -f "$CLEAN_SSH_CONFIG" ]; then
+      args+=( --ro-bind "$CLEAN_SSH_CONFIG" /etc/ssh/ssh_config )
+    fi
 
     # Determine bwrap target binary
     if [ $START_SHELL ]; then
