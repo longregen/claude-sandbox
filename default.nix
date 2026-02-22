@@ -1,12 +1,10 @@
 { lib
 , stdenv
-, nodejs_22
 , bubblewrap
-, makeWrapper
 , writeShellScript
 , fetchurl
 , cacert
-, ripgrep
+, autoPatchelfHook
 , tun2socks
 , slirp4netns
 , iproute2
@@ -26,6 +24,7 @@ let
     ENABLE_NVIDIA=0
     ENABLE_KVM=0
     ENABLE_AUDIO=0
+    ENABLE_DOCKER=0
     SOCKS_PROXY=""
     EXTRA_ENVS=()
     CLAUDE_ARGS=()
@@ -60,6 +59,10 @@ let
           ENABLE_AUDIO=1
           shift
           ;;
+        --docker)
+          ENABLE_DOCKER=1
+          shift
+          ;;
         --env)
           EXTRA_ENVS+=("$2")
           shift 2
@@ -92,9 +95,34 @@ let
     mkdir -p "$SANDBOX_HOME"
     mkdir -p "$SANDBOX_HOME/.cache"
     mkdir -p "$SANDBOX_HOME/.config"
-    # Make sure the working directory path exists in the sandbox  
+    mkdir -p "$SANDBOX_HOME/.local/bin"
+    ln -s "$out/bin/claude-achtung-achtung" "$SANDBOX_HOME/.local/bin/claude"
+    # Seed installMethod so `claude doctor` doesn't warn about unknown install
+    mkdir -p "$HOME/.claude"
+    CLAUDE_CFG="$HOME/.claude/.config.json"
+    if [ -f "$CLAUDE_CFG" ]; then
+      if command -v jq >/dev/null 2>&1; then
+        if ! jq -e '.installMethod == "native"' "$CLAUDE_CFG" >/dev/null 2>&1; then
+          jq '.installMethod = "native" | .autoUpdates = false' "$CLAUDE_CFG" > "$CLAUDE_CFG.tmp" && mv "$CLAUDE_CFG.tmp" "$CLAUDE_CFG"
+        fi
+      fi
+    else
+      echo '{"installMethod":"native","autoUpdates":false}' > "$CLAUDE_CFG"
+    fi
+    # Make sure the working directory path exists in the sandbox
     mkdir -p "$SANDBOX_HOME/$(echo "$PWD" | sed "s|^/home/$USER||")"
     USER=$(whoami)
+
+    # Fix SSH inside bubblewrap: Nix store files appear as nobody:nogroup
+    # in the user namespace, causing SSH to reject system config includes
+    # (e.g. systemd's 20-systemd-ssh-proxy.conf). Generate a cleaned
+    # ssh_config that strips Include directives pointing into /nix/store.
+    CLEAN_SSH_CONFIG="$SANDBOX_TMP/ssh_config"
+    if [ -f /etc/ssh/ssh_config ]; then
+      sed '/^[[:space:]]*Include.*\/nix\/store/d' /etc/ssh/ssh_config > "$CLEAN_SSH_CONFIG"
+    else
+      touch "$CLEAN_SSH_CONFIG"
+    fi
     
     # Only allow access to current project directory and essential system files
     ALLOWLIST=(
@@ -209,6 +237,7 @@ let
       if [ -S "/run/user/$(id -u)/gnupg/S.gpg-agent" ]; then
         ALLOWLIST+=( "/run/user/$(id -u)/gnupg/S.gpg-agent" )
       fi
+
     fi
     
     if [ "$ENABLE_LIBVIRT" -eq 1 ]; then
@@ -338,6 +367,21 @@ let
       fi
     fi
 
+    if [ "$ENABLE_DOCKER" -eq 1 ]; then
+      # Docker daemon socket
+      if [ -S "/var/run/docker.sock" ]; then
+        ALLOWLIST+=( "/var/run/docker.sock" )
+      fi
+      # Alternate socket path
+      if [ -S "/run/docker.sock" ]; then
+        ALLOWLIST+=( "/run/docker.sock" )
+      fi
+      # Rootless Docker (user-scoped socket)
+      if [ -S "$XDG_RUNTIME_DIR/docker.sock" ]; then
+        ALLOWLIST+=( "$XDG_RUNTIME_DIR/docker.sock" )
+      fi
+    fi
+
     # Always read config file if it exists
     CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
     if [ -f "$CONFIG_FILE" ]; then
@@ -382,14 +426,19 @@ let
             ENABLE_AUDIO=1
           fi
 
+          # Read docker option - enable Docker daemon access if set to true
+          if jq -e '.docker == true' "$CONFIG_FILE" >/dev/null 2>&1; then
+            ENABLE_DOCKER=1
+          fi
+
           # Read extraEnvs - pass arbitrary environment variables into the sandbox
           while IFS= read -r env_pair; do
             EXTRA_ENVS+=("$env_pair")
           done < <(jq -r '.extraEnvs[]? // empty' "$CONFIG_FILE" 2>/dev/null)
 
-          # Read yolo option - add --dangerously-skip-permissions if set to true
+          # Read yolo option - enable skipping all permission checks
           if jq -e '.yolo == true' "$CONFIG_FILE" >/dev/null 2>&1; then
-            CLAUDE_ARGS+=("--dangerously-skip-permissions")
+            CLAUDE_ARGS+=("--allow-dangerously-skip-permissions" "--dangerously-skip-permissions")
           fi
 
           # Read socksProxy option - force all traffic through a SOCKS proxy
@@ -424,6 +473,7 @@ let
         env_args+=( --setenv "$env" "''${!env}" )
       fi
     done
+    env_args+=( --setenv "PATH" "/home/$USER/.local/bin:$PATH" )
     env_args+=( --setenv "NODE_ENV" "production" )
     env_args+=( --setenv "SHELL" "$(readlink $(which $SHELL))" )
     env_args+=( --setenv "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY" "1")
@@ -480,6 +530,13 @@ let
       fi
       if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
         env_args+=( --setenv "DBUS_SESSION_BUS_ADDRESS" "$DBUS_SESSION_BUS_ADDRESS" )
+      fi
+    fi
+
+    # Pass DOCKER_HOST env var if --docker is enabled
+    if [ "$ENABLE_DOCKER" -eq 1 ]; then
+      if [ -n "$DOCKER_HOST" ]; then
+        env_args+=( --setenv "DOCKER_HOST" "$DOCKER_HOST" )
       fi
     fi
 
@@ -557,6 +614,12 @@ let
         fi
       fi
     done
+
+    # Override system ssh_config inside the sandbox with the cleaned version
+    # (must come after /etc is mounted so this overlays the original file)
+    if [ -f "$CLEAN_SSH_CONFIG" ]; then
+      args+=( --ro-bind "$CLEAN_SSH_CONFIG" /etc/ssh/ssh_config )
+    fi
 
     # Determine bwrap target binary
     if [ $START_SHELL ]; then
@@ -719,50 +782,48 @@ NSEOF
     echo "Removed from allowed directories: $DIR"
   '';
 
+  gcsBase = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
+
+  # Wrapper that sets SSL certificates for Nix before exec-ing the native binary
+  claudeWrapper = writeShellScript "claude-achtung-achtung" ''
+    export SSL_CERT_FILE="''${SSL_CERT_FILE:-${cacert}/etc/ssl/certs/ca-bundle.crt}"
+    export NIX_SSL_CERT_FILE="''${NIX_SSL_CERT_FILE:-${cacert}/etc/ssl/certs/ca-bundle.crt}"
+    export CURL_CA_BUNDLE="''${CURL_CA_BUNDLE:-${cacert}/etc/ssl/certs/ca-bundle.crt}"
+    exec @claude_native@ "$@"
+  '';
+
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.1.31";
+  version = "2.1.50";
 
+  # Native binary from Anthropic's GCS distribution bucket
   src = fetchurl {
-    url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "1l8ivy79li1a1cyailp1cdcd91fgicfxwm42ymzr0wxx511xr6k1";
+    url = "${gcsBase}/${version}/linux-x64/claude";
+    sha256 = "0y5y2x1kvf3j10l3bsgjqag66ml91m642rqz3iws8n3w34wjf13l";
   };
-  
-  nativeBuildInputs = [ makeWrapper ripgrep ];
-  buildInputs = [ nodejs_22 bubblewrap cacert tun2socks slirp4netns iproute2 util-linux ];
 
-  # No build phase needed
+  dontUnpack = true;
   dontBuild = true;
+  # The native binary is a Bun SEA with Claude Code appended after the ELF.
+  # Nix's strip phase destroys the embedded application data.
+  dontStrip = true;
+
+  # autoPatchelfHook fixes the ELF interpreter for NixOS
+  nativeBuildInputs = [ autoPatchelfHook ];
+  buildInputs = [ stdenv.cc.cc.lib bubblewrap cacert tun2socks slirp4netns iproute2 util-linux ];
 
   installPhase = ''
-    # Create directories
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code
     mkdir -p $out/bin
 
-    # Copy package contents
-    cp -r * $out/lib/node_modules/@anthropic-ai/claude-code/
+    # Install the native Claude Code binary
+    cp $src $out/bin/claude-native
+    chmod +x $out/bin/claude-native
 
-    # Create backups directory and move scripts and vendor folders
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/backups
-    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/scripts" ]; then
-      mv $out/lib/node_modules/@anthropic-ai/claude-code/scripts $out/lib/node_modules/@anthropic-ai/claude-code/backups/
-    fi
-    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/vendor" ]; then
-      mv $out/lib/node_modules/@anthropic-ai/claude-code/vendor $out/lib/node_modules/@anthropic-ai/claude-code/backups/
-    fi
-
-    # Create vendor/ripgrep directory and symlink rg binary
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux
-    ln -s ${ripgrep}/bin/rg $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg
-
-    cat > $out/bin/claude-achtung-achtung << EOF
-#!/usr/bin/env node
-process.env.SSL_CERT_FILE = process.env.SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.NIX_SSL_CERT_FILE = process.env.NIX_SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.CURL_CA_BUNDLE = process.env.CURL_CA_BUNDLE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-import('$out/lib/node_modules/@anthropic-ai/claude-code/cli.js');
-EOF
+    # Install SSL-cert wrapper (writeShellScript gives us a proper Nix shebang)
+    cp ${claudeWrapper} $out/bin/claude-achtung-achtung
     chmod +x $out/bin/claude-achtung-achtung
+    substituteInPlace $out/bin/claude-achtung-achtung \
+      --replace '@claude_native@' "$out/bin/claude-native"
 
     # Create our sandboxed wrapper
     cp ${sandboxWrapper} $out/bin/claude-sandbox
@@ -787,7 +848,7 @@ EOF
     homepage = "https://github.com/anthropics/claude-code";
     license = licenses.mit;
     maintainers = [ ];
-    platforms = platforms.linux;
+    platforms = [ "x86_64-linux" ];
     mainProgram = "claude-sandbox";
   };
 }
