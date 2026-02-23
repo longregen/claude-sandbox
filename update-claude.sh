@@ -3,6 +3,14 @@ set -euo pipefail
 
 GCS_BASE="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
 
+# Platforms we support — maps Nix system name to GCS platform name
+declare -A PLATFORMS=(
+    ["x86_64-linux"]="linux-x64"
+    ["aarch64-linux"]="linux-arm64"
+    ["aarch64-darwin"]="darwin-arm64"
+    ["x86_64-darwin"]="darwin-x64"
+)
+
 # Get the latest version from the GCS release channel
 echo "Checking latest version of Claude Code..."
 LATEST_VERSION=$(curl -sf "$GCS_BASE/latest")
@@ -18,36 +26,48 @@ if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
     # Fetch the release manifest for checksum verification
     echo "Fetching manifest..."
     MANIFEST=$(curl -sf "$GCS_BASE/$LATEST_VERSION/manifest.json")
-    EXPECTED_SHA256=$(echo "$MANIFEST" | jq -r '.platforms["linux-x64"].checksum')
-    if [ -z "$EXPECTED_SHA256" ] || [ "$EXPECTED_SHA256" = "null" ]; then
-        echo "ERROR: Could not extract linux-x64 checksum from manifest" >&2
-        echo "$MANIFEST" >&2
-        exit 1
-    fi
-    echo "Manifest SHA256: $EXPECTED_SHA256"
 
-    # Download the native binary and compute its Nix hash
-    BINARY_URL="$GCS_BASE/$LATEST_VERSION/linux-x64/claude"
-    echo "Downloading $BINARY_URL..."
+    for nix_system in "${!PLATFORMS[@]}"; do
+        gcs_platform="${PLATFORMS[$nix_system]}"
+        echo ""
+        echo "=== $nix_system ($gcs_platform) ==="
 
-    PREFETCH_OUTPUT=$(nix-prefetch-url --type sha256 --print-path "$BINARY_URL")
-    NEW_HASH=$(echo "$PREFETCH_OUTPUT" | head -1)
-    NIX_STORE_PATH=$(echo "$PREFETCH_OUTPUT" | tail -1)
+        EXPECTED_SHA256=$(echo "$MANIFEST" | jq -r ".platforms[\"$gcs_platform\"].checksum")
+        if [ -z "$EXPECTED_SHA256" ] || [ "$EXPECTED_SHA256" = "null" ]; then
+            echo "ERROR: Could not extract $gcs_platform checksum from manifest" >&2
+            echo "$MANIFEST" >&2
+            exit 1
+        fi
+        echo "Manifest SHA256: $EXPECTED_SHA256"
 
-    # Verify download against the manifest checksum
-    ACTUAL_SHA256=$(sha256sum "$NIX_STORE_PATH" | cut -d' ' -f1)
-    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-        echo "ERROR: SHA256 checksum mismatch!" >&2
-        echo "  Manifest expects: $EXPECTED_SHA256" >&2
-        echo "  Binary has:       $ACTUAL_SHA256" >&2
-        exit 1
-    fi
-    echo "Checksum verified: $ACTUAL_SHA256"
+        # Download the native binary and compute its Nix hash
+        BINARY_URL="$GCS_BASE/$LATEST_VERSION/$gcs_platform/claude"
+        echo "Downloading $BINARY_URL..."
 
-    echo "Updating default.nix..."
+        PREFETCH_OUTPUT=$(nix-prefetch-url --type sha256 --print-path "$BINARY_URL")
+        NEW_HASH=$(echo "$PREFETCH_OUTPUT" | head -1)
+        NIX_STORE_PATH=$(echo "$PREFETCH_OUTPUT" | tail -1)
+
+        # Verify download against the manifest checksum
+        ACTUAL_SHA256=$(sha256sum "$NIX_STORE_PATH" | cut -d' ' -f1)
+        if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "ERROR: SHA256 checksum mismatch for $gcs_platform!" >&2
+            echo "  Manifest expects: $EXPECTED_SHA256" >&2
+            echo "  Binary has:       $ACTUAL_SHA256" >&2
+            exit 1
+        fi
+        echo "Checksum verified: $ACTUAL_SHA256"
+
+        # Update the hash for this specific platform in default.nix
+        # Match the line containing the nix system name and update the sha256 on that line
+        echo "Updating default.nix for $nix_system..."
+        sed -i "/$nix_system/s/sha256 = \"[^\"]*\"/sha256 = \"$NEW_HASH\"/" default.nix
+    done
+
+    # Update the version number (single occurrence)
     sed -i "s/version = \".*\";/version = \"$LATEST_VERSION\";/" default.nix
-    sed -i "s/sha256 = \".*\";/sha256 = \"$NEW_HASH\";/" default.nix
 
+    echo ""
     echo "  Version: $CURRENT_VERSION -> $LATEST_VERSION"
 fi
 
