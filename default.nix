@@ -13,10 +13,10 @@
 
 let
   platformInfo = {
-    "x86_64-linux"   = { platform = "linux-x64";    sha256 = "0y5y2x1kvf3j10l3bsgjqag66ml91m642rqz3iws8n3w34wjf13l"; };
-    "aarch64-linux"  = { platform = "linux-arm64";  sha256 = "08mfqqp78wy6gjjk3ynmjimscc6j0ggf2nn9xpaihygrybdj6asf"; };
-    "aarch64-darwin"  = { platform = "darwin-arm64"; sha256 = "1dyig5dmwdlhi2zzwghw00cnd84yiz18i3yh03vdna14w2siqv2b"; };
-    "x86_64-darwin"   = { platform = "darwin-x64";  sha256 = "0g0kl9dzfxd71aim0hfc56xz14abv3w1k2p8gr4s0krads682592"; };
+    "x86_64-linux"   = { platform = "linux-x64";    sha256 = "176fjx6y8qzlp6fckjsb16ps1k6rh71r8p39yd4iq2bw3f4gkhbh"; };
+    "aarch64-linux"  = { platform = "linux-arm64";  sha256 = "1wk8173p2w3wn953pd8g62nrzk8ndw78d066xnc0lm9n16cq3q5g"; };
+    "aarch64-darwin"  = { platform = "darwin-arm64"; sha256 = "08zwzihs91pzc6zpn09350qnkpw89vp982j5izl6kyhi66dw9s11"; };
+    "x86_64-darwin"   = { platform = "darwin-x64";  sha256 = "1h4pxfv8wkhx5p2amzw01hfyd3a3vh292nfczxxh19wa4finyyj4"; };
   }.${stdenv.hostPlatform.system} or (throw "Unsupported system: ${stdenv.hostPlatform.system}");
 
   # Platform-specific sandbox wrapper
@@ -96,7 +96,7 @@ let
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.1.50";
+  version = "2.1.52";
 
   # Native binary from Anthropic's GCS distribution bucket
   src = fetchurl {
