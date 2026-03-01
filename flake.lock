@@ -20,10 +20,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1771880143,
-        "narHash": "sha256-DA+qRWt+XU9YzUgg5hNdmbfqN/vhtKwY9r7LRXRhKfA=",
+        "lastModified": 1772148531,
+        "narHash": "sha256-N4s7LtzSPLcNd4dYPBsufF2h/cEIOroDeh7V22amVu0=",
         "ref": "refs/heads/master",
-        "rev": "e79ef3bb1e549d844e8375586c20fadb1ad14323",
+        "rev": "071ec9f266cd2f4540ace89c40686e799372ae0d",
         "shallow": true,
         "type": "git",
         "url": "ssh://gitea/mirrors/nixpkgs"
