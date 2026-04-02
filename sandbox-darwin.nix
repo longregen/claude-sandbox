@@ -71,6 +71,7 @@ writeShellScript "claude-sandbox" ''
   [ -f "$HOME/.claude.json" ] && RW_PATHS+=( "$HOME/.claude.json" )
   [ -d "$HOME/.config/claude" ] && RW_PATHS+=( "$HOME/.config/claude" )
   [ -f "$HOME/.config/claude-sandbox.json" ] && RW_PATHS+=( "$HOME/.config/claude-sandbox.json" )
+  [ -f "$HOME/.config/claude-sandbox.local.json" ] && RO_PATHS+=( "$HOME/.config/claude-sandbox.local.json" )
 
   # Cache directories
   CACHE_DIRS=(
@@ -111,6 +112,22 @@ writeShellScript "claude-sandbox" ''
 
   # ── Read config file ─────────────────────────────────────────────────
   CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
+
+  # Merge .local.json overrides if present
+  LOCAL_CONFIG="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.local.json"
+  if [ -f "$CONFIG_FILE" ] && [ -f "$LOCAL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
+    MERGED=$(mktemp)
+    trap "rm -f '$MERGED'" EXIT
+    if jq -s '.[0] as $b | .[1] as $l |
+      reduce ([$b, $l] | map(keys) | add | unique)[] as $k ({};
+        if ($b[$k] | type) == "array" and ($l[$k] | type) == "array" then . + {($k): ($b[$k] + $l[$k])}
+        elif ($l | has($k)) then . + {($k): $l[$k]}
+        else . + {($k): $b[$k]} end
+      )' "$CONFIG_FILE" "$LOCAL_CONFIG" > "$MERGED" 2>/dev/null; then
+      CONFIG_FILE="$MERGED"
+    fi
+  fi
+
   if [ -f "$CONFIG_FILE" ] && ! command -v jq >/dev/null 2>&1; then
     echo "Warning: jq not found. Please install jq for proper config parsing." >&2
   fi

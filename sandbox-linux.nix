@@ -132,6 +132,7 @@ writeShellScript "claude-sandbox" ''
     ".cargo"
     ".config/claude"
     ".config/claude-sandbox.json"
+    ".config/claude-sandbox.local.json"
     ".config/nix"
     ".cursor"
     ".docker"
@@ -197,10 +198,23 @@ writeShellScript "claude-sandbox" ''
   fi
 
   if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
-    # Allow access to SSH and git config in real home
-    # SSH dir is read-only — the agent should never modify keys or ssh_config
+    # SSH checks that ~/.ssh/config and key files are owned by the running user.
+    # Inside bwrap's user namespace, bind-mounted files appear as nobody:nogroup
+    # and SSH rejects them. Instead, copy ~/.ssh into the sandbox home so the
+    # files are created with the sandbox user's ownership.
     if [ -d "$HOME/.ssh" ]; then
-      ALLOWLIST+=( "ro:$HOME/.ssh" )
+      SANDBOX_SSH="$SANDBOX_HOME/.ssh"
+      mkdir -p "$SANDBOX_SSH"
+      chmod 700 "$SANDBOX_SSH"
+      for f in "$HOME/.ssh"/*; do
+        [ -e "$f" ] || continue
+        cp -aL "$f" "$SANDBOX_SSH/$(basename "$f")" 2>/dev/null || true
+      done
+      # Ensure correct permissions on key files
+      chmod 600 "$SANDBOX_SSH"/* 2>/dev/null || true
+      chmod 644 "$SANDBOX_SSH"/*.pub 2>/dev/null || true
+      [ -f "$SANDBOX_SSH/config" ] && chmod 644 "$SANDBOX_SSH/config"
+      [ -f "$SANDBOX_SSH/known_hosts" ] && chmod 644 "$SANDBOX_SSH/known_hosts"
     fi
     if [ -d "$HOME/.gitconfig" ] || [ -f "$HOME/.gitconfig" ]; then
       ALLOWLIST+=( "$HOME/.gitconfig" )
@@ -374,6 +388,21 @@ writeShellScript "claude-sandbox" ''
 
   # Always read config file if it exists
   CONFIG_FILE="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.json"
+
+  # Merge .local.json overrides if present
+  LOCAL_CONFIG="''${XDG_CONFIG_HOME:-$HOME/.config}/claude-sandbox.local.json"
+  if [ -f "$CONFIG_FILE" ] && [ -f "$LOCAL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
+    MERGED="$SANDBOX_TMP/claude-sandbox-merged.json"
+    if jq -s '.[0] as $b | .[1] as $l |
+      reduce ([$b, $l] | map(keys) | add | unique)[] as $k ({};
+        if ($b[$k] | type) == "array" and ($l[$k] | type) == "array" then . + {($k): ($b[$k] + $l[$k])}
+        elif ($l | has($k)) then . + {($k): $l[$k]}
+        else . + {($k): $b[$k]} end
+      )' "$CONFIG_FILE" "$LOCAL_CONFIG" > "$MERGED" 2>/dev/null; then
+      CONFIG_FILE="$MERGED"
+    fi
+  fi
+
   if [ -f "$CONFIG_FILE" ]; then
     # Parse the JSON config file
     if command -v jq >/dev/null 2>&1; then
