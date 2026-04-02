@@ -11,6 +11,8 @@ writeShellScript "claude-sandbox" ''
     case "$1" in
       --ssh-git)
         ENABLE_SSH_GIT=1
+        echo "Warning: --ssh-git grants full SSH client access, not just git-over-SSH." >&2
+        echo "         The agent can connect to any host reachable via your SSH keys/agent." >&2
         shift
         ;;
       --docker)

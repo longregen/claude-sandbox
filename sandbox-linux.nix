@@ -22,6 +22,8 @@ writeShellScript "claude-sandbox" ''
         ;;
       --ssh-git)
         ENABLE_SSH_GIT=1
+        echo "Warning: --ssh-git grants full SSH client access, not just git-over-SSH." >&2
+        echo "         The agent can connect to any host reachable via your SSH keys/agent." >&2
         shift
         ;;
       --libvirt)
@@ -102,10 +104,13 @@ writeShellScript "claude-sandbox" ''
   # in the user namespace, causing SSH to reject system config includes
   # (e.g. systemd's 20-systemd-ssh-proxy.conf). Generate a cleaned
   # ssh_config that strips Include directives pointing into /nix/store.
+  # On NixOS /etc/ssh/ssh_config is typically a symlink into the Nix store,
+  # so we resolve it first and later create a writable /etc/ssh overlay.
   CLEAN_SSH_CONFIG=""
-  if [ -f /etc/ssh/ssh_config ]; then
+  REAL_SSH_CONFIG=$(readlink -f /etc/ssh/ssh_config 2>/dev/null || echo "")
+  if [ -n "$REAL_SSH_CONFIG" ] && [ -f "$REAL_SSH_CONFIG" ]; then
     CLEAN_SSH_CONFIG="$SANDBOX_TMP/ssh_config"
-    sed '/^[[:space:]]*Include.*\/nix\/store/d' /etc/ssh/ssh_config > "$CLEAN_SSH_CONFIG"
+    sed '/^[[:space:]]*Include.*\/nix\/store/d' "$REAL_SSH_CONFIG" > "$CLEAN_SSH_CONFIG"
   fi
 
   # Only allow access to current project directory and essential system files
@@ -193,8 +198,9 @@ writeShellScript "claude-sandbox" ''
 
   if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
     # Allow access to SSH and git config in real home
+    # SSH dir is read-only — the agent should never modify keys or ssh_config
     if [ -d "$HOME/.ssh" ]; then
-      ALLOWLIST+=( "$HOME/.ssh" )
+      ALLOWLIST+=( "ro:$HOME/.ssh" )
     fi
     if [ -d "$HOME/.gitconfig" ] || [ -f "$HOME/.gitconfig" ]; then
       ALLOWLIST+=( "$HOME/.gitconfig" )
@@ -598,12 +604,29 @@ writeShellScript "claude-sandbox" ''
     fi
   done
 
-  # Override system ssh_config inside the sandbox with the cleaned version
-  # (must come after /etc is mounted so this overlays the original file)
-  # Skip if the target is a symlink — bwrap cannot overlay onto symlinks
-  # inside a read-only bind mount (common on NixOS where /etc is a symlink forest).
-  if [ -f "$CLEAN_SSH_CONFIG" ] && [ -f /etc/ssh/ssh_config ] && [ ! -L /etc/ssh/ssh_config ]; then
-    args+=( --ro-bind "$CLEAN_SSH_CONFIG" /etc/ssh/ssh_config )
+  # Override system ssh_config inside the sandbox with the cleaned version.
+  # Must come after /etc is mounted so this overlays the original file.
+  if [ -f "$CLEAN_SSH_CONFIG" ]; then
+    if [ -f /etc/ssh/ssh_config ] && [ ! -L /etc/ssh/ssh_config ]; then
+      # Simple case: regular file — bind directly over it
+      args+=( --ro-bind "$CLEAN_SSH_CONFIG" /etc/ssh/ssh_config )
+    elif [ -d /etc/ssh ] || [ -L /etc/ssh/ssh_config ]; then
+      # NixOS case: /etc/ssh/ssh_config is a symlink (into /nix/store).
+      # bwrap cannot overlay onto a symlink inside a read-only bind mount.
+      # Instead, create a temporary /etc/ssh directory with the cleaned
+      # config and copies of other files from the real /etc/ssh.
+      CLEAN_SSH_DIR="$SANDBOX_TMP/etc-ssh"
+      mkdir -p "$CLEAN_SSH_DIR"
+      # Copy non-config files (ssh_known_hosts, moduli, etc.) if they exist
+      for f in /etc/ssh/*; do
+        [ -e "$f" ] || continue
+        bf=$(basename "$f")
+        [ "$bf" = "ssh_config" ] && continue
+        cp -aL "$f" "$CLEAN_SSH_DIR/$bf" 2>/dev/null || true
+      done
+      cp "$CLEAN_SSH_CONFIG" "$CLEAN_SSH_DIR/ssh_config"
+      args+=( --ro-bind "$CLEAN_SSH_DIR" /etc/ssh )
+    fi
   fi
 
   # Determine bwrap target binary
